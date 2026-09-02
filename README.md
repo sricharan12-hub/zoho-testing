@@ -14,6 +14,14 @@ account held on the server — no employee ever has a Zoho username or password.
 | Database | PostgreSQL (Supabase), accessed server-side with the service role key  |
 | Auth     | JWT in an httpOnly cookie, bcrypt password hashes, revocable sessions  |
 
+The brief names Express or NestJS for the backend. This uses Next.js Route
+Handlers instead — still Node.js, and still a distinct backend with its own
+authentication service, RBAC authorisation engine and Zoho integration layer
+(`src/lib/`). The trade is one deployable and one type system across the
+client/server boundary rather than two services to run and keep in sync.
+Swapping in Express would mean moving `src/app/api/**` to routers; the layers
+underneath are already framework-agnostic.
+
 ## Setup
 
 ### 1. Environment
@@ -97,13 +105,25 @@ flash; it is never the authorisation boundary.
   mirrored in the browser.
 - **Cookies** — httpOnly, sameSite=lax, and `secure` in production.
 - **HTTPS** — HSTS plus `nosniff`, `DENY` framing and a strict referrer policy,
-  set in `next.config.ts`.
+  set in `next.config.ts` and applied to every route. HSTS is what enforces
+  HTTPS once TLS terminates in front of the app, which is the case on any
+  managed host (Vercel, Fly, a reverse proxy). Browsers ignore HSTS on plain
+  `http://localhost`, so local development is unaffected — the header is
+  present there but dormant, by design rather than by omission.
 - **Zoho tokens** — the refresh token never leaves the server. Access tokens are
   cached in memory and refreshed early, so employee traffic never triggers a
   token exchange per request.
 - **Audit** — sign-ins (including failures), Zoho access, denied attempts, and
   every administrative change are written to `audit_logs` with actor, IP and
   user agent.
+- **Self-registration** — `/signup` lets someone create their own account, so a
+  fresh install has a way in without seeding. It widens who may hold an account,
+  not what an account can reach: a self-registered user gets the baseline
+  `Employee` role, which grants zero permissions and therefore no Zoho
+  application, until an admin assigns a role. For a deployment where accounts
+  should be admin-provisioned only, drop `/signup` from `PUBLIC_PATHS` in
+  `src/proxy.ts` and delete `src/app/api/auth/signup`, or gate it on an
+  email-domain allowlist.
 
 ## Zoho credentials
 
@@ -143,6 +163,7 @@ page as a warning with the remedy, rather than failing the whole dashboard.
 | Method | Route                      | Permission          |
 | ------ | -------------------------- | ------------------- |
 | POST   | `/api/auth/login`          | public              |
+| POST   | `/api/auth/signup`         | public              |
 | POST   | `/api/auth/logout`         | authenticated       |
 | GET    | `/api/auth/me`             | authenticated       |
 | GET    | `/api/zoho/[app]`          | that app's `zoho.*` |
@@ -157,6 +178,32 @@ page as a warning with the remedy, rather than failing the whole dashboard.
 | DELETE | `/api/admin/roles/[id]`    | `admin.roles.write` |
 | GET    | `/api/admin/permissions`   | `admin.roles.read`  |
 | GET    | `/api/admin/audit`         | `admin.audit.read`  |
+
+## Verifying
+
+`scripts/verify.sh` checks the business requirements end to end against a
+running server. Nothing is stubbed or imported: every assertion is an HTTP
+request made the way a user — or someone poking at the URL bar — would make it.
+
+```bash
+npm run dev              # in one terminal
+bash scripts/verify.sh   # in another
+```
+
+62 checks across ten areas: JWT authentication, self-service signup, the
+role-to-Zoho-application matrix, server-side permission enforcement, live Zoho
+integration, admin user/role/permission management, session and timeout
+control, user deletion with the audit trail intact, transport security headers,
+and manager department scoping.
+
+The checks that matter most are the negative ones — `sales` calling
+`/api/zoho/books`, `employee` calling `/api/admin/audit`, an unauthenticated
+call to any API — because a hidden dashboard tile proves nothing on its own.
+Each must come back 403 or 401.
+
+The suite creates a temporary user and role and removes both when it finishes,
+so it is safe to re-run. Point it elsewhere with
+`BASE=https://portal.example.com bash scripts/verify.sh`.
 
 ## Layout
 
