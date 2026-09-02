@@ -1,0 +1,323 @@
+================================================================================
+HOW THE ZOHO INTEGRATION WORKS
+Custom Employee Portal with Zoho One Integration
+================================================================================
+
+THE ONE IDEA BEHIND ALL OF IT
+--------------------------------------------------------------------------------
+Employees have NO Zoho account.
+
+They sign in to this portal with portal credentials (an email and a bcrypt
+password hash stored in our own `users` table). The portal holds ONE set of
+Zoho credentials — a service account — on the server, and makes every Zoho call
+on the employee's behalf.
+
+So there are two completely separate identity systems, and they never touch:
+
+    Employee  --(portal email + password)-->  PORTAL       (our database)
+    Portal    --(one OAuth refresh token)-->  ZOHO ONE     (one service account)
+
+The employee's browser never sees a Zoho client id, client secret, refresh
+token, or access token. Ever. What decides whether an employee may see Zoho
+Books is our own RBAC tables — not anything Zoho knows about them.
+
+This is what the brief means by:
+  "Employees should not require individual Zoho usernames or passwords."
+  "Use a single Zoho One account (or service account) for backend integrations."
+
+
+--------------------------------------------------------------------------------
+1. THE CREDENTIALS, AND WHERE THEY COME FROM
+--------------------------------------------------------------------------------
+Four values in `.env` are the whole Zoho identity of this application:
+
+    ZOHO_CLIENT_ID          identifies our app to Zoho
+    ZOHO_CLIENT_SECRET      proves it is really our app
+    ZOHO_REFRESH_TOKEN      the permanent, long-lived key to the service account
+    ZOHO_ACCOUNTS_URL       which Zoho data centre (.in, .com, .eu ...)
+
+How the refresh token is obtained (one-time setup):
+
+  a) At https://api-console.zoho.in you create a "Self Client" and press
+     Generate Code, choosing the scopes the portal needs (Books, Desk, CRM,
+     People — the full list is in README.md).
+  b) Zoho gives you a GRANT CODE that expires in a few minutes.
+  c) You run:   npm run zoho:bootstrap -- <grant-code> --write
+     That script (scripts/zoho-bootstrap.mjs) exchanges the short-lived grant
+     code for a PERMANENT refresh token and writes it into `.env`. It also
+     discovers the Books and Desk organisation IDs.
+
+Two Zoho constraints that matter here:
+  - Scopes are FROZEN into a refresh token. Adding a fifth Zoho app later means
+    generating a brand new code with the full scope list — you cannot extend an
+    existing token.
+  - A client is capped at 20 refresh tokens. Beyond that Zoho silently
+    invalidates the oldest one. This is a large part of why the portal caches
+    its tokens instead of exchanging one per request.
+
+Code: src/lib/env.ts reads and validates these. It uses getters so a missing
+variable throws a clear "Missing environment variable ZOHO_CLIENT_ID" at the
+point of use, instead of surfacing later as a confusing "invalid_client" coming
+back from Zoho.
+
+
+--------------------------------------------------------------------------------
+2. ACCESS TOKENS: THE REFRESH-AND-CACHE LAYER
+--------------------------------------------------------------------------------
+File: src/lib/zoho/token.ts
+
+A refresh token is permanent but cannot call APIs. To call an API you need an
+ACCESS token, which Zoho issues for about one hour.
+
+    refresh token (permanent, secret)  ---exchange--->  access token (~1 hour)
+
+`getAccessToken()` does this:
+
+    if a cached token exists and is not about to expire:
+        return it immediately            <-- no network call at all
+    else:
+        POST to  {ZOHO_ACCOUNTS_URL}/oauth/v2/token
+             with grant_type=refresh_token + client id + secret + refresh token
+        cache the returned access token with its expiry
+        return it
+
+The cache is a module-level variable, so it is shared by every request the
+server handles. A burst of 100 employees opening their dashboards causes ONE
+token exchange, not 100.
+
+Two details worth knowing:
+
+  - EARLY REFRESH. The token is renewed 5 minutes before its stated expiry
+    (EARLY_REFRESH_MS). Without that margin, a request that starts at 59m59s
+    would sail into an expired token mid-flight.
+
+  - ZOHO RETURNS 200 ON FAILURE. If the credentials are wrong, Zoho replies
+    HTTP 200 with an `error` field in the JSON body rather than a 4xx status.
+    So the code checks for the presence of `access_token`, not the status code,
+    and raises ZohoAuthError with a message naming which env var to check.
+
+
+--------------------------------------------------------------------------------
+3. THE SINGLE CHOKE POINT FOR OUTBOUND CALLS
+--------------------------------------------------------------------------------
+File: src/lib/zoho/client.ts   ->   zohoFetch()
+
+Every single outbound Zoho request goes through this one function. Nothing
+calls Zoho directly. That is deliberate: if there is exactly one door, the
+service-account token can only be attached in one place, and it can never
+accidentally leak into a response.
+
+What it does:
+
+  1. Gets an access token (from cache, usually).
+  2. Builds the URL. Either an absolute URL, or a path appended to the
+     account's api_domain (Zoho tells us the correct domain at token time).
+  3. Attaches the header:   Authorization: Zoho-oauthtoken <access token>
+  4. Sends the request with cache: "no-store".
+  5. RETRIES ONCE ON 401. A cached token can be revoked upstream before its
+     recorded expiry — an admin revokes it in the Zoho console, say. On a 401
+     it clears the cache, mints a fresh token, and retries exactly once. Once,
+     never in a loop, so a genuinely bad credential fails fast instead of
+     hammering Zoho.
+  6. Parses the response defensively. Some Zoho 404s come back as bare text
+     ("API endpoint not found"), not JSON, so a JSON parse failure is handled
+     rather than thrown as a crash.
+  7. On error, throws ZohoApiError carrying a status, a Zoho error code, a
+     message, and — where we can work it out — a REMEDY: a sentence telling an
+     admin what to actually do. For example, OAUTH_SCOPE_MISMATCH produces
+     "The Zoho refresh token was issued without this application's scope.
+     Regenerate it with the full scope list."
+
+
+--------------------------------------------------------------------------------
+4. THE FOUR APPLICATIONS
+--------------------------------------------------------------------------------
+File: src/lib/zoho/apps.ts
+
+The brief names four role-to-application pairings. Each is defined as one entry
+in the ZOHO_APPS record:
+
+  ROLE      APPLICATION    PERMISSION KEY        WHAT IT FETCHES
+  -------   ------------   -------------------   ---------------------------
+  HR        Zoho People    zoho.people.access    employee records
+  Sales     Zoho CRM       zoho.crm.access       leads
+  Support   Zoho Desk      zoho.desk.access      support tickets
+  Finance   Zoho Books     zoho.books.access     invoices
+
+Each entry carries: a display name, the purpose text, the permission key that
+unlocks it, an accent colour, a deepLink() (where "Open in Zoho" sends the
+user), and a load() function that fetches and normalises its data.
+
+NORMALISATION IS THE POINT. All four load() functions return the same shape:
+
+    ModuleData = {
+      stats:   [{ label, value }]        e.g. "Invoices: 12"
+      columns: [{ key, label }]          the table header
+      rows:    [{ key: value }]          the table body
+    }
+
+Because every app returns that identical shape, ONE React component renders
+all four. Adding a fifth Zoho app means writing one load() function — no new
+UI, no new route, no new page.
+
+The four APIs are genuinely inconsistent, and each load() absorbs that:
+
+  - PEOPLE lives on its own host (people.zoho.<tld>), ignores the shared
+    zohoapis domain, returns HTTP 200 even when it failed (so the body must be
+    inspected for an `errors` object), and nests its records in an awkward
+    [{ "<recordId>": [ {...} ] }] structure that has to be flattened.
+  - CRM uses the shared api domain, /crm/v8/Leads, and takes an explicit
+    `fields` list.
+  - DESK lives on desk.zoho.<tld> and requires an `orgId` HTTP HEADER.
+  - BOOKS requires an `organization_id` QUERY PARAMETER, and its outstanding
+    balance is computed here by summing the invoice balances.
+
+Where an org ID is missing from `.env`, the app raises a clear ZohoApiError
+naming the variable and how to obtain it, instead of failing mysteriously.
+
+
+--------------------------------------------------------------------------------
+5. WHERE PERMISSION IS ENFORCED
+--------------------------------------------------------------------------------
+File: src/lib/zoho/access.ts   ->   loadAppForUser()
+
+This is the function that ties RBAC to Zoho, and it is the ONLY implementation
+of "fetch a Zoho module for a user". Both entry points — the server-rendered
+page and the JSON API — call it. That is intentional: if the permission check
+lived in two places, the two could drift apart and one could be forgotten.
+
+    loadAppForUser(user, appKey):
+
+        if the user does NOT hold app.permission:
+            write an "access.denied" audit entry
+            return "denied"                      <-- no Zoho call is ever made
+
+        fetch the data through app.load()  ->  zohoFetch  ->  Zoho
+        write a "zoho.access" audit entry
+        return the normalised data
+
+Note the ordering: an unauthorised user's request never reaches Zoho at all.
+The permission check is not a UI concern, and hiding a dashboard tile is not
+what protects anything.
+
+The dashboard hides tiles the user cannot use (src/app/(portal)/layout.tsx and
+dashboard/page.tsx filter ALL_APPS by permission), but that is cosmetic. The
+real gate is here on the server. This is why the verification suite spends most
+of its assertions on NEGATIVE cases — a Sales user calling /api/zoho/books
+directly with curl gets a 403, not data.
+
+
+--------------------------------------------------------------------------------
+6. THE TWO ENTRY POINTS
+--------------------------------------------------------------------------------
+(a) SERVER-RENDERED PAGE — src/app/(portal)/dashboard/[app]/page.tsx
+
+    The employee clicks a tile and lands on /dashboard/books. The page runs on
+    the SERVER: it resolves the user, calls loadAppForUser(), and renders the
+    stats and table into HTML. The browser receives finished markup. No Zoho
+    token, and no Zoho response, is ever shipped to the client.
+
+(b) JSON API — src/app/api/zoho/[app]/route.ts
+
+    GET /api/zoho/books returns the same data as JSON, for scripts and for the
+    verification suite. Same permission check, same audit trail, because it
+    calls the same loadAppForUser().
+
+    Its status codes: 404 unknown app, 401 not signed in, 403 not permitted,
+    502 with a remedy when Zoho itself is the problem. A Zoho-side failure is
+    reported as a Zoho-side failure — it is not allowed to look like a portal
+    crash, and it does not take down the rest of the dashboard.
+
+"Open in Zoho ↗" uses app.deepLink() to send the user to the real Zoho web app
+in a new tab. That is a plain hyperlink to Zoho's own site — at that point the
+user is on Zoho's property and Zoho's own login rules apply. It is a
+convenience, not part of the data path.
+
+
+--------------------------------------------------------------------------------
+7. THE FULL REQUEST, END TO END
+--------------------------------------------------------------------------------
+An employee in the Finance role opens Zoho Books:
+
+  1. Browser requests /dashboard/books with the portal session cookie.
+  2. src/proxy.ts sees a session cookie exists. This is an OPTIMISTIC check
+     only — it prevents a protected shell flashing before a redirect. It is
+     never the authorisation boundary.
+  3. getCurrentUser() (src/lib/auth/session.ts) verifies the JWT, confirms the
+     session row is live (not revoked, not expired, not idle past 30 minutes),
+     and reads roles and permissions FRESH FROM THE DATABASE — deliberately not
+     from the token, so an admin revoking a role takes effect on the user's very
+     next request rather than an hour later when the JWT expires.
+  4. loadAppForUser(user, "books") checks for `zoho.books.access`.
+  5. Permission held -> loadBooks() -> zohoFetch() -> getAccessToken()
+     (cache hit, no network) -> GET /books/v3/invoices with the service
+     account's bearer token.
+  6. Zoho returns invoices. loadBooks() normalises them into stats/columns/rows.
+  7. The audit entry is written AFTER the response is sent (see section 8).
+  8. The page renders as HTML and is sent to the browser.
+
+Total: one database round trip for auth, one Zoho call. The employee saw no
+Zoho credential at any point, and the portal made no Zoho call it was not
+authorised to make.
+
+
+--------------------------------------------------------------------------------
+8. PERFORMANCE NOTES
+--------------------------------------------------------------------------------
+Two things keep this fast, both measured rather than guessed:
+
+  TOKEN CACHING. Without the module-level cache in token.ts, every employee
+  page view would cost an extra round trip to Zoho's OAuth endpoint before the
+  real request even started — and would burn through the 20-refresh-token cap.
+
+  NON-BLOCKING AUDIT WRITES. An audit insert is a full database round trip
+  (~150ms). For an entry nobody is waiting on — a Zoho read whose data is
+  already in hand — that round trip sat on the critical path for no benefit.
+  Those writes now use auditAfter() (src/lib/audit.ts), which runs them via
+  Next.js `after()` once the response has been sent. The row is still written,
+  with the same client IP and user agent, which are captured before deferring.
+
+  The deliberate exception: FAILED SIGN-IN audits are still written inline,
+  because loginLockout() (src/lib/auth/throttle.ts) counts those rows to decide
+  whether an account is locked. Deferring them would let a burst of attempts
+  slip past the throttle. Success audits are deferred; failure audits are not.
+
+What is NOT cached: the Zoho responses themselves. The page says "Fetched live",
+and it means it. A short server-side TTL cache would make repeat navigation
+faster, but it would trade away freshness of live business data — a product
+decision rather than a technical one.
+
+
+--------------------------------------------------------------------------------
+9. SECURITY SUMMARY
+--------------------------------------------------------------------------------
+  - The refresh token never leaves the server. It lives in `.env`, is read only
+    through src/lib/env.ts, and is used only inside src/lib/zoho/token.ts.
+  - Access tokens are held in server memory only. They are never serialised
+    into a page, a props object, or a JSON response.
+  - Every Zoho response is normalised into ModuleData before it reaches the
+    client, so raw Zoho payloads (which can carry ids and metadata we have no
+    reason to expose) are not forwarded wholesale.
+  - The verification suite asserts this directly: it greps a Zoho API response
+    for the strings "refresh_token", "client_secret" and "access_token" and
+    fails if any appears.
+  - Every Zoho access, and every denied attempt, is recorded in `audit_logs`
+    with the actor, their IP and their user agent.
+
+
+--------------------------------------------------------------------------------
+10. FILE MAP
+--------------------------------------------------------------------------------
+  src/lib/env.ts                        validated env access, Zoho hosts per TLD
+  src/lib/zoho/token.ts                 refresh -> access token, cached
+  src/lib/zoho/client.ts                zohoFetch(): the single outbound door
+  src/lib/zoho/apps.ts                  the four apps + their load() functions
+  src/lib/zoho/access.ts                permission check + audit + fetch
+  src/app/api/zoho/[app]/route.ts       JSON entry point
+  src/app/(portal)/dashboard/[app]/page.tsx   server-rendered entry point
+  scripts/zoho-bootstrap.mjs            one-time grant code -> refresh token
+
+  To add a fifth Zoho application: add one entry to ZOHO_APPS with a load()
+  function returning ModuleData, add its permission row to the seed, and grant
+  that permission to a role. No new route and no new UI component are needed.
+================================================================================
