@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
+/* Portal design tokens. Defined on :root so both themes stay in one place. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --surface-muted: #f1f3f6;
+  --foreground: #12151b;
+  --muted: #5c6675;
+  --border: #e2e6ec;
+  --accent: #4338ca;
+  --accent-contrast: #ffffff;
+  --danger: #b42318;
+  --success: #067647;
+  --warning: #b54708;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0c0e13;
+    --surface: #14171f;
+    --surface-muted: #1b1f29;
+    --foreground: #e8eaee;
+    --muted: #97a1b0;
+    --border: #262b36;
+    --accent: #8b8cf5;
+    --accent-contrast: #0c0e13;
+    --danger: #f97066;
+    --success: #47cd89;
+    --warning: #f79009;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Wide tables scroll inside their own container, never the page. */
+.table-scroll {
+  overflow-x: auto;
 }
