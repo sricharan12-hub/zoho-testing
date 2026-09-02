@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { PasswordField } from "@/components/password-field";
 
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
@@ -63,18 +64,13 @@ export function LoginForm({ next }: { next: string }) {
         placeholder="you@company.com"
       />
 
-      <label className="mt-4 block text-sm font-medium" htmlFor="password">
-        Password
-      </label>
-      <input
+      <PasswordField
         id="password"
-        type="password"
+        label="Password"
         autoComplete="current-password"
-        required
         value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/25"
-        placeholder="••••••••"
+        onChange={setPassword}
+        className="mt-4"
       />
 
       {error ? (

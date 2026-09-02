@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { PasswordField } from "@/components/password-field";
 
 const field =
   "mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/25";
@@ -109,35 +110,23 @@ export function SignupForm({ next }: { next: string }) {
         placeholder="Sales"
       />
 
-      <label className="mt-4 block text-sm font-medium" htmlFor="password">
-        Password
-      </label>
-      <input
+      <PasswordField
         id="password"
-        type="password"
+        label="Password"
         autoComplete="new-password"
-        required
         value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        className={field}
-        placeholder="••••••••"
+        onChange={setPassword}
+        hint="At least 8 characters, including a letter and a number."
+        className="mt-4"
       />
-      <p className="mt-1.5 text-xs text-muted">
-        At least 8 characters, including a letter and a number.
-      </p>
 
-      <label className="mt-4 block text-sm font-medium" htmlFor="confirm">
-        Confirm password
-      </label>
-      <input
+      <PasswordField
         id="confirm"
-        type="password"
+        label="Confirm password"
         autoComplete="new-password"
-        required
         value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        className={field}
-        placeholder="••••••••"
+        onChange={setConfirm}
+        className="mt-4"
       />
 
       {error ? (
