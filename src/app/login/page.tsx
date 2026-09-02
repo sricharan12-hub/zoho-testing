@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { LoginForm } from "@/components/login-form";
@@ -27,13 +26,8 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         <LoginForm next={target} />
 
         <p className="mt-6 text-center text-sm text-muted">
-          Need an account?{" "}
-          <Link
-            href={{ pathname: "/signup", query: { next: target } }}
-            className="font-medium text-accent underline-offset-4 hover:underline"
-          >
-            Create one
-          </Link>
+          Accounts are created by your administrator. If you do not have one
+          yet, contact your IT or HR team.
         </p>
 
         <p className="mt-4 text-center text-xs leading-relaxed text-muted">

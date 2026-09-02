@@ -49,14 +49,20 @@ if echo "$HDR" | grep -qi httponly; then ok "session cookie is HttpOnly"; else b
 if echo "$HDR" | grep -qi samesite; then ok "session cookie is SameSite"; else bad "session cookie is SameSite" "SameSite" "$HDR"; fi
 is "credential is a 3-part JWT" 3 "$(grep portal_session "$JAR/admin.txt" | awk '{print $7}' | awk -F. '{print NF}')"
 
-sec "2. Self-service signup"
+sec "2. Accounts exist only because an admin created them"
+# There is no self-service route in. An account comes into being when an admin
+# creates it and attaches a role, which is the flow the brief specifies.
 STS=$(date +%s)
-is "signup rejects a weak password"   400 "$(code -X POST "$BASE/api/auth/signup" -H 'Content-Type: application/json' -d '{"email":"w@portal.test","fullName":"W X","password":"short"}')"
-is "signup rejects a malformed email" 400 "$(code -X POST "$BASE/api/auth/signup" -H 'Content-Type: application/json' -d '{"email":"nope","fullName":"W X","password":"Portal@123"}')"
-is "signup rejects a duplicate email" 409 "$(code -X POST "$BASE/api/auth/signup" -H 'Content-Type: application/json' -d '{"email":"Employee@Portal.test","fullName":"W X","password":"Portal@123"}')"
-is "signup creates an account"        201 "$(curl -s -c "$JAR/new.txt" -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth/signup" -H 'Content-Type: application/json' -d "{\"email\":\"v$STS@portal.test\",\"fullName\":\"Verify User\",\"password\":\"Portal@123\"}")"
-is "new account is signed in already" 200 "$(code -b "$JAR/new.txt" "$BASE/api/auth/me")"
-is "new account gets no Zoho app"     ""  "$(tiles new)"
+is "no self-service signup endpoint"  404 "$(code -X POST "$BASE/api/auth/signup" -H 'Content-Type: application/json' -d '{"email":"w@portal.test","fullName":"W X","password":"Portal@123"}')"
+is "login page offers no way to self-register" 0 "$(curl -s "$BASE/login" | grep -c "/signup")"
+HRID=$(as admin "$BASE/api/admin/roles" | grep -o "{\"id\":\"[^\"]*\",\"name\":\"HR\"" | cut -d'"' -f4)
+ONB=$(as admin -X POST "$BASE/api/admin/users" -H 'Content-Type: application/json' \
+  -d "{\"email\":\"v$STS@portal.test\",\"fullName\":\"Onboarded User\",\"password\":\"Portal@123\",\"roleIds\":[\"$HRID\"]}")
+VUID=$(echo "$ONB" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -n "$VUID" ]; then ok "admin onboards a user with its role in one request"; else bad "admin onboards a user with its role" "an id" "$ONB"; fi
+is "onboarded account can sign in"           200 "$(login "v$STS@portal.test" Portal@123 new)"
+is "onboarded account sees only its role's app" "Zoho People" "$(tiles new)"
+is "admin can remove the account again"      200 "$(code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/users/$VUID")"
 
 sec "3. RBAC - each role sees only its own Zoho application"
 for r in hr sales support finance employee; do login "$r@portal.test" Portal@123 "$r" >/dev/null; done
@@ -129,8 +135,6 @@ sec "8. Admin deletes users, audit trail survives"
 is "delete a user that has login history" 200 "$(code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/users/$NUID")"
 if as admin "$BASE/api/admin/audit" | grep -q "t$TS@portal.test"; then ok "deleted user's audit trail survives"; else bad "deleted user audit trail survives" "entries retained" "gone"; fi
 code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/roles/$RID" >/dev/null
-VUID=$(as admin "$BASE/api/admin/users?q=v$STS" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-[ -n "$VUID" ] && code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/users/$VUID" >/dev/null
 ok "temporary user and role cleaned up"
 
 sec "9. Transport security headers"

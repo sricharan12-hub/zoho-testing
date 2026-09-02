@@ -5,7 +5,7 @@ import { useId, useState } from "react";
 /**
  * A password input with a reveal toggle.
  *
- * Shared by sign-in and sign-up so the two cannot drift in behaviour or in
+ * Shared by every password entry point so they cannot drift in behaviour or in
  * appearance, and so the accessibility details are written once: the toggle is
  * a real button (not a div), it is `type="button"` so it never submits the form
  * around it, and its label states what pressing it will do rather than what the

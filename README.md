@@ -116,14 +116,15 @@ flash; it is never the authorisation boundary.
 - **Audit** — sign-ins (including failures), Zoho access, denied attempts, and
   every administrative change are written to `audit_logs` with actor, IP and
   user agent.
-- **Self-registration** — `/signup` lets someone create their own account, so a
-  fresh install has a way in without seeding. It widens who may hold an account,
-  not what an account can reach: a self-registered user gets the baseline
-  `Employee` role, which grants zero permissions and therefore no Zoho
-  application, until an admin assigns a role. For a deployment where accounts
-  should be admin-provisioned only, drop `/signup` from `PUBLIC_PATHS` in
-  `src/proxy.ts` and delete `src/app/api/auth/signup`, or gate it on an
-  email-domain allowlist.
+- **Account provisioning** — there is no self-service registration. An account
+  exists because an admin created it at `/admin/users`, which sets the initial
+  password and attaches roles in the same request. This matches how people
+  actually join a company — you get a portal account because you were hired,
+  not because you reached the URL — and it keeps the set of people holding an
+  account a deliberate decision rather than a consequence of who can browse to
+  the login page. The only public routes are `/login` and `/api/auth/login`.
+  A fresh install gets its first admin from `npm run db:seed`, not from a
+  registration form.
 
 ## Zoho credentials
 
@@ -163,7 +164,6 @@ page as a warning with the remedy, rather than failing the whole dashboard.
 | Method | Route                      | Permission          |
 | ------ | -------------------------- | ------------------- |
 | POST   | `/api/auth/login`          | public              |
-| POST   | `/api/auth/signup`         | public              |
 | POST   | `/api/auth/logout`         | authenticated       |
 | GET    | `/api/auth/me`             | authenticated       |
 | GET    | `/api/zoho/[app]`          | that app's `zoho.*` |
@@ -190,11 +190,12 @@ npm run dev              # in one terminal
 bash scripts/verify.sh   # in another
 ```
 
-62 checks across ten areas: JWT authentication, self-service signup, the
-role-to-Zoho-application matrix, server-side permission enforcement, live Zoho
-integration, admin user/role/permission management, session and timeout
-control, user deletion with the audit trail intact, transport security headers,
-and manager department scoping.
+70 checks across eleven areas: JWT authentication, admin-only account
+onboarding, the role-to-Zoho-application matrix, server-side permission
+enforcement, live Zoho integration, admin user/role/permission management,
+session and timeout control, user deletion with the audit trail intact,
+transport security headers, manager department scoping, and the guards that
+stop a role or permission assignment from silently destroying access.
 
 The checks that matter most are the negative ones — `sales` calling
 `/api/zoho/books`, `employee` calling `/api/admin/audit`, an unauthenticated
