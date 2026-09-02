@@ -135,6 +135,27 @@ create trigger users_touch_updated_at
 create or replace function public.audit_logs_append_only()
 returns trigger language plpgsql as $$
 begin
+  -- One update is permitted: the null-out that Postgres itself performs when a
+  -- user row is deleted, because audit_logs.user_id is `on delete set null`.
+  -- Without this exemption the trigger blocks its own foreign key, and any
+  -- user who has ever been audited — that is, anyone who has ever logged in —
+  -- can never be deleted.
+  --
+  -- The trail is not weakened by allowing it: every column describing WHAT
+  -- happened is required to be byte-identical, and actor_email still names the
+  -- actor after their user row is gone.
+  if tg_op = 'UPDATE'
+     and old.user_id is not null
+     and new.user_id is null
+     and (new.id, new.actor_email, new.action, new.resource, new.status,
+          new.detail, new.ip, new.user_agent, new.created_at)
+         is not distinct from
+         (old.id, old.actor_email, old.action, old.resource, old.status,
+          old.detail, old.ip, old.user_agent, old.created_at)
+  then
+    return new;
+  end if;
+
   raise exception 'audit_logs is append-only: % is not permitted', tg_op;
 end $$;
 
