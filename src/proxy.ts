@@ -12,7 +12,7 @@ import { SESSION_COOKIE } from "@/lib/auth/cookie";
  * every page and API route independently enforces the real check through
  * getCurrentUser() / requirePermission().
  */
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/signup"];
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

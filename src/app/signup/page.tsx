@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
-import { LoginForm } from "@/components/login-form";
+import { SignupForm } from "@/components/signup-form";
 
-export const metadata = { title: "Sign in · Employee Portal" };
+export const metadata = { title: "Create account · Employee Portal" };
 
-export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+export default async function SignupPage({ searchParams }: PageProps<"/signup">) {
   if (await getCurrentUser()) redirect("/dashboard");
 
   const { next } = await searchParams;
@@ -18,27 +18,27 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
           <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-accent text-lg font-semibold text-accent-contrast">
             EP
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">Employee Portal</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Create your account</h1>
           <p className="mt-1 text-sm text-muted">
-            Sign in with your portal credentials
+            Register for portal access in a few seconds
           </p>
         </div>
 
-        <LoginForm next={target} />
+        <SignupForm next={target} />
 
         <p className="mt-6 text-center text-sm text-muted">
-          Need an account?{" "}
+          Already have an account?{" "}
           <Link
-            href={{ pathname: "/signup", query: { next: target } }}
+            href={{ pathname: "/login", query: { next: target } }}
             className="font-medium text-accent underline-offset-4 hover:underline"
           >
-            Create one
+            Sign in
           </Link>
         </p>
 
         <p className="mt-4 text-center text-xs leading-relaxed text-muted">
-          Your Zoho services are reached through this portal. You never need a
-          Zoho username or password.
+          New accounts start with baseline access. An administrator assigns the
+          Zoho applications your role needs.
         </p>
       </div>
     </main>
