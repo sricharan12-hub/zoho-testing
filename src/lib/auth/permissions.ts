@@ -44,7 +44,12 @@ export const ROLES: {
     name: "Manager",
     description: "Team information and reports for assigned departments",
     isSystem: true,
-    permissions: ["team.reports.read", "admin.users.read"],
+    // team.reports.read alone. admin.users.read is deliberately NOT granted:
+    // it is an org-wide read, so it would let a manager list every employee in
+    // the company through /api/admin/users, beyond the "assigned departments"
+    // scope the role is meant to have. The team report reads the caller's own
+    // department from their user record instead.
+    permissions: ["team.reports.read"],
   },
   {
     name: "HR",

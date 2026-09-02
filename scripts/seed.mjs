@@ -47,7 +47,7 @@ const ALL = PERMISSIONS.map((p) => p.key);
 
 const ROLES = [
   { name: "Admin", description: "Full portal access, user and role administration", is_system: true, permissions: ALL },
-  { name: "Manager", description: "Team information and reports for assigned departments", is_system: true, permissions: ["team.reports.read", "admin.users.read"] },
+  { name: "Manager", description: "Team information and reports for assigned departments", is_system: true, permissions: ["team.reports.read"] },
   { name: "HR", description: "HR management functions via Zoho People", is_system: true, permissions: ["zoho.people.access"] },
   { name: "Sales", description: "Sales and customer relationship management via Zoho CRM", is_system: true, permissions: ["zoho.crm.access"] },
   { name: "Support", description: "Support ticketing and case management via Zoho Desk", is_system: true, permissions: ["zoho.desk.access"] },
