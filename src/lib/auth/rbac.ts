@@ -1,40 +1,42 @@
 import { db } from "@/lib/supabase";
 import "server-only";
 
-type RoleRow = { roles: { name: string } | null };
-type PermRow = { permissions: { key: string } | null };
+type NestedRoleRow = {
+  roles: {
+    name: string;
+    role_permissions: { permissions: { key: string } | null }[] | null;
+  } | null;
+};
 
 /**
  * Resolves a user's effective roles and the union of their permissions.
  * A user with several roles gets every permission any of those roles grants.
+ *
+ * This is one nested read rather than two sequential ones. The previous shape
+ * fetched user_roles, waited for the role ids, then fetched role_permissions —
+ * two round trips to Supabase on the critical path of every authenticated
+ * request. PostgREST can walk both foreign keys in a single query.
  */
 export async function permissionsForUser(
   userId: string
 ): Promise<{ roles: string[]; permissions: string[] }> {
-  const supabase = db();
-
-  const { data: roleRows } = await supabase
+  const { data } = await db()
     .from("user_roles")
-    .select("role_id, roles ( name )")
+    .select("roles ( name, role_permissions ( permissions ( key ) ) )")
     .eq("user_id", userId);
 
-  const roleIds = (roleRows ?? []).map((r) => (r as { role_id: string }).role_id);
-  const roles = (roleRows ?? [])
-    .map((r) => (r as unknown as RoleRow).roles?.name)
+  const rows = (data ?? []) as unknown as NestedRoleRow[];
+
+  const roles = rows
+    .map((r) => r.roles?.name)
     .filter((n): n is string => Boolean(n))
     .sort();
 
-  if (roleIds.length === 0) return { roles, permissions: [] };
-
-  const { data: permRows } = await supabase
-    .from("role_permissions")
-    .select("permissions ( key )")
-    .in("role_id", roleIds);
-
   const permissions = [
     ...new Set(
-      (permRows ?? [])
-        .map((r) => (r as unknown as PermRow).permissions?.key)
+      rows
+        .flatMap((r) => r.roles?.role_permissions ?? [])
+        .map((rp) => rp.permissions?.key)
         .filter((k): k is string => Boolean(k))
     ),
   ].sort();

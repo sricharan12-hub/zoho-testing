@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { hasPermission } from "@/lib/auth/rbac";
-import { listTeamMembers, teamActivity } from "@/lib/admin/queries";
+import {
+  listTeamMembers,
+  teamActivityForDepartment,
+} from "@/lib/admin/queries";
 import { ALL_APPS } from "@/lib/zoho/apps";
 import { Forbidden } from "@/components/forbidden";
 
@@ -34,8 +37,11 @@ export default async function TeamPage() {
     );
   }
 
-  const members = await listTeamMembers(user.department);
-  const activity = await teamActivity(members.map((m) => m.id));
+  // Independent reads, so pay for one round trip rather than two.
+  const [members, activity] = await Promise.all([
+    listTeamMembers(user.department),
+    teamActivityForDepartment(user.department),
+  ]);
 
   const active = members.filter((m) => m.isActive).length;
   const withService = members.filter((m) =>

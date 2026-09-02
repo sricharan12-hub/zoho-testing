@@ -252,19 +252,42 @@ export async function listTeamMembers(department: string): Promise<TeamMember[]>
 }
 
 /** Recent activity for a set of users, for the team report. */
-export async function teamActivity(userIds: string[]): Promise<TeamActivity[]> {
-  if (userIds.length === 0) return [];
-
+/**
+ * Recent activity for one department.
+ *
+ * Filters through the audit_logs -> users foreign key rather than taking a list
+ * of member ids, so this no longer has to wait for listTeamMembers() to return.
+ * The two are the whole cost of the team page and can now run concurrently.
+ *
+ * The inner join also drops rows whose user was deleted (user_id is nulled by
+ * the offboarding path), which is right for a department view: a removed
+ * employee has no department to be scoped to.
+ */
+export async function teamActivityForDepartment(
+  department: string
+): Promise<TeamActivity[]> {
   const { data, error } = await db()
     .from("audit_logs")
-    .select("id, actor_email, action, resource, status, created_at")
-    .in("user_id", userIds)
+    .select(
+      "id, actor_email, action, resource, status, created_at, users!inner ( department )"
+    )
+    .eq("users.department", department)
     .order("created_at", { ascending: false })
     .limit(25);
 
   if (error) throw new Error(error.message);
 
-  return (data ?? []).map((e) => ({
+  // The generated types do not describe embedded rows, so name the shape here.
+  type Row = {
+    id: number;
+    actor_email: string | null;
+    action: string;
+    resource: string | null;
+    status: string;
+    created_at: string;
+  };
+
+  return ((data ?? []) as unknown as Row[]).map((e) => ({
     id: e.id,
     actorEmail: e.actor_email,
     action: e.action,
@@ -273,3 +296,4 @@ export async function teamActivity(userIds: string[]): Promise<TeamActivity[]> {
     createdAt: e.created_at,
   }));
 }
+

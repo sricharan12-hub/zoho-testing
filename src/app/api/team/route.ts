@@ -1,5 +1,8 @@
 import { guard, json, requirePermission } from "@/lib/api";
-import { listTeamMembers, teamActivity } from "@/lib/admin/queries";
+import {
+  listTeamMembers,
+  teamActivityForDepartment,
+} from "@/lib/admin/queries";
 
 /**
  * Manager-scoped team report. The department comes from the caller's own
@@ -14,8 +17,10 @@ export async function GET(request: Request) {
       return json({ department: null, members: [], activity: [] });
     }
 
-    const members = await listTeamMembers(user.department);
-    const activity = await teamActivity(members.map((m) => m.id));
+    const [members, activity] = await Promise.all([
+      listTeamMembers(user.department),
+      teamActivityForDepartment(user.department),
+    ]);
 
     return json({ department: user.department, members, activity });
   });
