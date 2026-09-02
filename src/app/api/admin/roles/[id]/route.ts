@@ -1,7 +1,11 @@
 import { db } from "@/lib/supabase";
 import type { RoleRow } from "@/lib/database.types";
 import { audit } from "@/lib/audit";
-import { countRoleHolders } from "@/lib/admin/guards";
+import {
+  countRoleHolders,
+  missingIds,
+  wouldDisarmAdminRole,
+} from "@/lib/admin/guards";
 import { fail, guard, json, requirePermission } from "@/lib/api";
 
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -30,6 +34,23 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       return fail("System roles cannot be renamed.", 400);
     }
 
+    if (body.permissionIds) {
+      const unknown = await missingIds("permissions", body.permissionIds);
+      if (unknown.length) {
+        return fail(`Unknown permission: ${unknown.join(", ")}.`, 400);
+      }
+
+      // Stripping the Admin role of role administration cannot be undone from
+      // the UI — nobody would be left who could grant a permission back.
+      if (await wouldDisarmAdminRole(id, body.permissionIds)) {
+        return fail(
+          "The Admin role must keep admin.roles.read and admin.roles.write. " +
+            "Removing them would leave nobody able to administer the portal.",
+          409
+        );
+      }
+    }
+
     const patch: Partial<RoleRow> = {};
     if (body.name !== undefined && !role.is_system) patch.name = body.name.trim();
     if (body.description !== undefined) patch.description = body.description || null;
@@ -42,9 +63,19 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     if (body.permissionIds) {
       await supabase.from("role_permissions").delete().eq("role_id", id);
       if (body.permissionIds.length) {
-        await supabase
+        const { error } = await supabase
           .from("role_permissions")
-          .insert(body.permissionIds.map((permission_id) => ({ role_id: id, permission_id })));
+          .insert(
+            [...new Set(body.permissionIds)].map((permission_id) => ({
+              role_id: id,
+              permission_id,
+            }))
+          );
+        // The old set is already gone; failing loudly beats reporting success
+        // on a role that now grants nothing.
+        if (error) {
+          return fail(`Could not assign permissions: ${error.message}`, 500);
+        }
       }
 
       // Anyone holding this role has a stale permission set until they

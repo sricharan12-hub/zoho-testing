@@ -1,6 +1,7 @@
 import { db } from "@/lib/supabase";
 import { audit } from "@/lib/audit";
 import { listRoles } from "@/lib/admin/queries";
+import { missingIds } from "@/lib/admin/guards";
 import { fail, guard, json, requirePermission } from "@/lib/api";
 
 export async function GET(request: Request) {
@@ -21,6 +22,13 @@ export async function POST(request: Request) {
     };
 
     if (!body.name?.trim()) return fail("Role name is required.", 400);
+
+    if (body.permissionIds?.length) {
+      const unknown = await missingIds("permissions", body.permissionIds);
+      if (unknown.length) {
+        return fail(`Unknown permission: ${unknown.join(", ")}.`, 400);
+      }
+    }
 
     const supabase = db();
     const { data: existing } = await supabase
@@ -43,11 +51,20 @@ export async function POST(request: Request) {
     if (error || !created) return fail(error?.message ?? "Could not create role.", 500);
 
     if (body.permissionIds?.length) {
-      await supabase
+      const { error: permErr } = await supabase
         .from("role_permissions")
         .insert(
-          body.permissionIds.map((permission_id) => ({ role_id: created.id, permission_id }))
+          [...new Set(body.permissionIds)].map((permission_id) => ({
+            role_id: created.id,
+            permission_id,
+          }))
         );
+      if (permErr) {
+        return fail(
+          `Role created, but permissions could not be assigned: ${permErr.message}`,
+          500
+        );
+      }
     }
 
     await audit({

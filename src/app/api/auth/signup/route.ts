@@ -64,9 +64,14 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (role) {
-      await supabase
+      const { error: roleErr } = await supabase
         .from("user_roles")
         .insert({ user_id: created.id, role_id: role.id as string });
+      // An account with no role at all would be a dead end, so do not pretend
+      // the signup succeeded.
+      if (roleErr) {
+        return fail(`Could not finish creating the account: ${roleErr.message}`, 500);
+      }
     }
 
     await audit({

@@ -2,6 +2,7 @@ import { db } from "@/lib/supabase";
 import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { audit } from "@/lib/audit";
 import { listUsers } from "@/lib/admin/queries";
+import { missingIds } from "@/lib/admin/guards";
 import { fail, guard, json, requirePermission } from "@/lib/api";
 
 export async function GET(request: Request) {
@@ -37,6 +38,11 @@ export async function POST(request: Request) {
     const problem = passwordProblem(body.password);
     if (problem) return fail(problem, 400);
 
+    if (body.roleIds?.length) {
+      const unknown = await missingIds("roles", body.roleIds);
+      if (unknown.length) return fail(`Unknown role: ${unknown.join(", ")}.`, 400);
+    }
+
     const supabase = db();
     const { data: existing } = await supabase
       .from("users")
@@ -59,15 +65,21 @@ export async function POST(request: Request) {
     if (error || !created) return fail(error?.message ?? "Could not create user.", 500);
 
     if (body.roleIds?.length) {
-      await supabase
+      const { error: roleErr } = await supabase
         .from("user_roles")
         .insert(
-          body.roleIds.map((role_id) => ({
+          [...new Set(body.roleIds)].map((role_id) => ({
             user_id: created.id,
             role_id,
             assigned_by: admin.id,
           }))
         );
+      if (roleErr) {
+        return fail(
+          `User created, but roles could not be assigned: ${roleErr.message}`,
+          500
+        );
+      }
     }
 
     await audit({

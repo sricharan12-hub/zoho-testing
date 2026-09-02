@@ -2,7 +2,7 @@ import { db } from "@/lib/supabase";
 import type { UserRow } from "@/lib/database.types";
 import { hashPassword, passwordProblem } from "@/lib/auth/password";
 import { audit } from "@/lib/audit";
-import { wouldRemoveLastAdmin } from "@/lib/admin/guards";
+import { missingIds, wouldRemoveLastAdmin } from "@/lib/admin/guards";
 import { fail, guard, json, requirePermission } from "@/lib/api";
 
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -32,6 +32,15 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       );
     }
 
+    // Verify every role exists before touching anything: assignment replaces
+    // the old set, so an unknown id would otherwise leave the user with none.
+    if (body.roleIds?.length) {
+      const unknown = await missingIds("roles", body.roleIds);
+      if (unknown.length) {
+        return fail(`Unknown role: ${unknown.join(", ")}.`, 400);
+      }
+    }
+
     const supabase = db();
     const patch: Partial<UserRow> = {};
     if (body.fullName !== undefined) patch.full_name = body.fullName.trim();
@@ -54,15 +63,18 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     if (body.roleIds) {
       await supabase.from("user_roles").delete().eq("user_id", id);
       if (body.roleIds.length) {
-        await supabase
+        const { error } = await supabase
           .from("user_roles")
           .insert(
-            body.roleIds.map((role_id) => ({
+            [...new Set(body.roleIds)].map((role_id) => ({
               user_id: id,
               role_id,
               assigned_by: admin.id,
             }))
           );
+        // Reporting success here would tell an admin the user kept access they
+        // no longer have.
+        if (error) return fail(`Could not assign roles: ${error.message}`, 500);
       }
     }
 

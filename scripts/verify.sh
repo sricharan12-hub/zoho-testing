@@ -147,6 +147,31 @@ is "manager reads no other department" 0 "$(as manager "$BASE/api/admin/users" |
 is "manager still reaches team report" 200 "$(code -b "$JAR/manager.txt" "$BASE/api/team")"
 is "manager still reaches team page"   200 "$(code -b "$JAR/manager.txt" "$BASE/team")"
 
+sec "11. Assignment cannot silently destroy access"
+GTS=$(date +%s)
+GU=$(as admin -X POST "$BASE/api/admin/users" -H 'Content-Type: application/json' -d "{\"email\":\"g$GTS@portal.test\",\"fullName\":\"Guard Probe\",\"password\":\"Portal@123\"}")
+GUID=$(echo "$GU" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+SALESID=$(as admin "$BASE/api/admin/roles" | grep -o "{\"id\":\"[^\"]*\",\"name\":\"Sales\"" | cut -d'"' -f4)
+as admin -X PATCH "$BASE/api/admin/users/$GUID" -H 'Content-Type: application/json' -d "{\"roleIds\":[\"$SALESID\"]}" >/dev/null
+roles_of() { as admin "$BASE/api/admin/users?q=g$GTS" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ',' | sed 's/,$//'; }
+is "unknown role id is rejected" 400 "$(code -b "$JAR/admin.txt" -X PATCH "$BASE/api/admin/users/$GUID" -H 'Content-Type: application/json' -d '{"roleIds":["00000000-0000-0000-0000-000000000000"]}')"
+is "existing roles survive a rejected assignment" "Sales" "$(roles_of)"
+
+GR=$(as admin -X POST "$BASE/api/admin/roles" -H 'Content-Type: application/json' -d "{\"name\":\"Guard$GTS\"}")
+GRID=$(echo "$GR" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+CRMID=$(as admin "$BASE/api/admin/permissions" | grep -o "{\"id\":\"[^\"]*\",\"key\":\"zoho.crm.access\"" | cut -d'"' -f4)
+as admin -X PATCH "$BASE/api/admin/roles/$GRID" -H 'Content-Type: application/json' -d "{\"permissionIds\":[\"$CRMID\"]}" >/dev/null
+is "unknown permission id is rejected" 400 "$(code -b "$JAR/admin.txt" -X PATCH "$BASE/api/admin/roles/$GRID" -H 'Content-Type: application/json' -d '{"permissionIds":["00000000-0000-0000-0000-000000000000"]}')"
+if as admin "$BASE/api/admin/roles" | grep -q "zoho.crm.access"; then ok "existing permissions survive a rejected assignment"; else bad "permissions survive rejected assignment" "zoho.crm.access retained" "gone"; fi
+
+ADMINROLE=$(as admin "$BASE/api/admin/roles" | grep -o "{\"id\":\"[^\"]*\",\"name\":\"Admin\"" | cut -d'"' -f4)
+is "Admin role cannot be stripped of role administration" 409 "$(code -b "$JAR/admin.txt" -X PATCH "$BASE/api/admin/roles/$ADMINROLE" -H 'Content-Type: application/json' -d '{"permissionIds":[]}')"
+is "admin still administers after the refused strip" 200 "$(code -b "$JAR/admin.txt" "$BASE/api/admin/roles")"
+is "malformed audit date is a 400, not a crash" 400 "$(code -b "$JAR/admin.txt" "$BASE/api/admin/audit?to=notadate")"
+is "valid audit date filter still works" 200 "$(code -b "$JAR/admin.txt" "$BASE/api/admin/audit?to=2030-01-01")"
+code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/users/$GUID" >/dev/null
+code -b "$JAR/admin.txt" -X DELETE "$BASE/api/admin/roles/$GRID" >/dev/null
+
 printf "\n=========================================\n"
 printf " PASSED: %s     FAILED: %s\n" "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf "\n Failures:\n"; for f in "${FAILED[@]}"; do printf "  - %s\n" "$f"; done; fi

@@ -61,6 +61,67 @@ export async function wouldRemoveLastAdmin(
   return false;
 }
 
+/**
+ * Ids in `ids` that do not exist in `table`. An empty result means every id is
+ * real and safe to insert.
+ *
+ * Role and permission assignment is a delete-then-insert: the old set is
+ * removed before the new one is written. If the insert then fails a foreign
+ * key, the user or role is left with nothing at all. Checking first turns that
+ * silent access loss into a 400 with the old set still intact.
+ */
+export async function missingIds(
+  table: "roles" | "permissions",
+  ids: string[]
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const unique = [...new Set(ids)];
+
+  const { data, error } = await db().from(table).select("id").in("id", unique);
+  // A malformed id makes Postgres reject the whole comparison; treat every id
+  // as unverified rather than assuming they are fine.
+  if (error) return unique;
+
+  const found = new Set((data ?? []).map((r) => r.id as string));
+  return unique.filter((id) => !found.has(id));
+}
+
+/**
+ * Permissions the Admin role can never be left without. Removing these is not
+ * a mistake an admin can undo: with no way to read or edit roles, nobody can
+ * ever grant a permission again, and the portal has no administration at all.
+ * Everything else on the Admin role stays tunable.
+ */
+const UNREMOVABLE_ADMIN_PERMISSIONS = ["admin.roles.read", "admin.roles.write"];
+
+/**
+ * True when the requested permission set would strip the Admin role of the
+ * permissions needed to administer roles — an irreversible lockout.
+ */
+export async function wouldDisarmAdminRole(
+  roleId: string,
+  nextPermissionIds: string[]
+): Promise<boolean> {
+  const supabase = db();
+
+  const { data: role } = await supabase
+    .from("roles")
+    .select("name")
+    .eq("id", roleId)
+    .maybeSingle();
+  if (role?.name !== ADMIN_ROLE) return false;
+
+  if (nextPermissionIds.length === 0) return true;
+
+  const { data: perms } = await supabase
+    .from("permissions")
+    .select("key")
+    .in("id", [...new Set(nextPermissionIds)]);
+
+  const keys = new Set((perms ?? []).map((p) => p.key as string));
+  return !UNREMOVABLE_ADMIN_PERMISSIONS.every((k) => keys.has(k));
+}
+
 /** How many users still hold a role, used to block deleting one in use. */
 export async function countRoleHolders(roleId: string): Promise<number> {
   const { count } = await db()
