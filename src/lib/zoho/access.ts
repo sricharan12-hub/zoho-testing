@@ -1,4 +1,4 @@
-import { audit } from "@/lib/audit";
+import { auditAfter } from "@/lib/audit";
 import { hasPermission } from "@/lib/auth/rbac";
 import type { CurrentUser } from "@/lib/auth/session";
 import { ZOHO_APPS, type ZohoAppKey, type ModuleData } from "@/lib/zoho/apps";
@@ -25,7 +25,7 @@ export async function loadAppForUser(
   const app = ZOHO_APPS[key];
 
   if (!hasPermission(user, app.permission)) {
-    await audit({
+    auditAfter({
       userId: user.id,
       actorEmail: user.email,
       action: "access.denied",
@@ -41,7 +41,7 @@ export async function loadAppForUser(
   try {
     const data = await app.load();
 
-    await audit({
+    auditAfter({
       userId: user.id,
       actorEmail: user.email,
       action: "zoho.access",
@@ -54,7 +54,7 @@ export async function loadAppForUser(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Zoho request failed.";
 
-    await audit({
+    auditAfter({
       userId: user.id,
       actorEmail: user.email,
       action: "zoho.access",

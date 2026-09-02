@@ -1,9 +1,10 @@
+import { after } from "next/server";
 import { db } from "@/lib/supabase";
 import { verifyPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import { setSessionCookie } from "@/lib/auth/session";
 import { permissionsForUser } from "@/lib/auth/rbac";
-import { audit } from "@/lib/audit";
+import { audit, auditAfter } from "@/lib/audit";
 import { loginLockout, MAX_ATTEMPTS } from "@/lib/auth/throttle";
 import { fail, guard, json } from "@/lib/api";
 
@@ -16,9 +17,21 @@ export async function POST(request: Request) {
 
     if (!email || !password) return fail("Email and password are required.", 400);
 
-    // Throttle before touching the password hash, so a locked account costs
-    // an attacker a cheap rejection rather than a bcrypt comparison.
-    const lockout = await loginLockout(email);
+    const supabase = db();
+
+    // The throttle count and the user row are both keyed off the email alone,
+    // so they are read together rather than one after the other. bcrypt still
+    // runs only after the lockout verdict is known, which is the point of
+    // checking the throttle first: a locked account never costs a comparison.
+    const [lockout, { data: user }] = await Promise.all([
+      loginLockout(email),
+      supabase
+        .from("users")
+        .select("id, email, full_name, password_hash, is_active")
+        .ilike("email", email.trim())
+        .maybeSingle(),
+    ]);
+
     if (lockout.locked) {
       await audit({
         actorEmail: email,
@@ -32,13 +45,6 @@ export async function POST(request: Request) {
         429
       );
     }
-
-    const supabase = db();
-    const { data: user } = await supabase
-      .from("users")
-      .select("id, email, full_name, password_hash, is_active")
-      .ilike("email", email.trim())
-      .maybeSingle();
 
     // The same message for "no such user" and "wrong password" — telling them
     // apart would let anyone enumerate valid portal accounts.
@@ -88,24 +94,34 @@ export async function POST(request: Request) {
 
     const { token, jti, expiresAt } = signToken({ id: user.id, email: user.email });
 
-    await supabase.from("sessions").insert({
-      jti,
-      user_id: user.id,
-      expires_at: expiresAt.toISOString(),
-      ip:
-        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-        request.headers.get("x-real-ip"),
-      user_agent: request.headers.get("user-agent"),
-    });
-
-    await supabase
-      .from("users")
-      .update({ last_login_at: new Date().toISOString() })
-      .eq("id", user.id);
+    // The session row has to exist before the cookie is handed out — the very
+    // next request looks it up — but the caller's roles do not depend on it,
+    // so the two reads share one round trip instead of taking two.
+    const [, { roles, permissions }] = await Promise.all([
+      supabase.from("sessions").insert({
+        jti,
+        user_id: user.id,
+        expires_at: expiresAt.toISOString(),
+        ip:
+          request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+          request.headers.get("x-real-ip"),
+        user_agent: request.headers.get("user-agent"),
+      }),
+      permissionsForUser(user.id),
+    ]);
 
     await setSessionCookie(token, expiresAt);
 
-    await audit({
+    // Nobody is waiting on either of these, so they run once the response has
+    // gone out rather than adding two round trips to every sign-in.
+    after(async () => {
+      await supabase
+        .from("users")
+        .update({ last_login_at: new Date().toISOString() })
+        .eq("id", user.id);
+    });
+
+    auditAfter({
       userId: user.id,
       actorEmail: user.email,
       action: "auth.login",
@@ -113,7 +129,6 @@ export async function POST(request: Request) {
       request,
     });
 
-    const { roles, permissions } = await permissionsForUser(user.id);
     return json({
       user: {
         id: user.id,

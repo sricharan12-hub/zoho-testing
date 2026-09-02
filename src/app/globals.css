@@ -44,7 +44,10 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* The platform's own monospace face: nothing to download, nothing to flash.
+     Only two audit/team columns use it, which did not justify a webfont. */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
 }
 
 body {
@@ -56,4 +59,11 @@ body {
 /* Wide tables scroll inside their own container, never the page. */
 .table-scroll {
   overflow-x: auto;
+  /* Keep a sideways swipe inside the table. Without this, reaching the end of
+     a wide table hands the gesture to the browser, which reads it as "go back"
+     on iOS Safari and Chrome for Android — the table scrolls, then the page
+     navigates away mid-scroll. */
+  overscroll-behavior-x: contain;
+  /* Momentum scrolling on older iOS Safari, which is otherwise abrupt. */
+  -webkit-overflow-scrolling: touch;
 }
