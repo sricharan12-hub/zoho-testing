@@ -4,7 +4,12 @@
  *   npm run db:seed
  *
  * Idempotent: re-running updates existing rows rather than duplicating them,
- * so it is safe after editing src/lib/auth/permissions.ts.
+ * so it is safe after editing the catalogue below.
+ *
+ * The PERMISSIONS and ROLES tables below are the single definition of who may
+ * do what. A second copy used to live in src/lib/auth/permissions.ts, imported
+ * by nothing; the two drifted, and the stale copy is why the Manager role kept
+ * an org-wide user read it was never meant to have.
  */
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
@@ -28,8 +33,9 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-// Mirrors src/lib/auth/permissions.ts. Kept as plain data so this script has
-// no build step and can run straight from node.
+// Plain data so this script has no build step and runs straight from node.
+// Editing a role here and re-running `npm run db:seed` is the whole workflow:
+// role_permissions is replaced per role, so removing a permission removes it.
 const PERMISSIONS = [
   { key: "zoho.people.access", description: "Access Zoho People (HR)", zoho_app: "people" },
   { key: "zoho.crm.access", description: "Access Zoho CRM (Sales)", zoho_app: "crm" },
